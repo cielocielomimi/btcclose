@@ -31,126 +31,129 @@ from tensorflow.keras.metrics import RootMeanSquaredError, MeanAbsolutePercentag
 
 # ---------------- Config ----------------
 os.makedirs("out", exist_ok=True)
-CSV_PATH   = os.getenv("CSV_PATH", "data/oct15.csv")
-TIME_STEP  = int(os.getenv("TIME_STEP", "15"))
-DATA_SRC   = os.getenv("DATA_SOURCE", "binance").lower()  # binance|coingecko|yfinance
 
-print(f"[CFG] CSV_PATH={CSV_PATH}  TIME_STEP={TIME_STEP}  DATA_SOURCE={DATA_SRC}")
+TIME_STEP      = int(os.getenv("TIME_STEP", "15"))
+DATA_SRC       = os.getenv("DATA_SOURCE", "binance").lower()   # binance|coingecko|yfinance
+SYMBOL         = os.getenv("SYMBOL", "BTCUSDT")
+INTERVAL       = os.getenv("INTERVAL", "1d")
+HISTORY_START  = os.getenv("HISTORY_START", "2020-10-01")      # UTC
+
+print(f"[CFG] TIME_STEP={TIME_STEP}  DATA_SOURCE={DATA_SRC}  SYMBOL={SYMBOL}  START={HISTORY_START}")
 
 # ---------------- Data fetchers ----------------
-def fetch_latest_binance_data(symbol="BTCUSDT", interval="1d", start_date=None):
-    """
-    Try Binance; if blocked/empty, fall back to CoinGecko, then yfinance.
-    Returns columns: Date (UTC tz-aware), Open, High, Low, Close, Volume
-    """
-    if DATA_SRC != "binance":
-        return _fetch_fallback(DATA_SRC, start_date)
+BINANCE_URL = "https://api.binance.com/api/v3/klines"
 
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": 1000}
-    if start_date is not None:
-        ts = pd.to_datetime(start_date)
-        ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
-        params["startTime"] = int(ts.timestamp() * 1000)
-
-    try:
-        r = requests.get(url, params=params, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        if not isinstance(data, list) or len(data) == 0:
-            print("[WARN] Binance returned no data; falling back…")
-            return _fetch_fallback("coingecko", start_date)
-        df = pd.DataFrame(data, columns=[
-            "Open Time","Open","High","Low","Close","Volume",
-            "Close Time","Quote Volume","Number of Trades",
-            "Taker Buy Base","Taker Buy Quote","Ignore"
-        ])
-        df["Date"] = pd.to_datetime(df["Open Time"], unit="ms", utc=True)
-        df[["Open","High","Low","Close","Volume"]] = df[["Open","High","Low","Close","Volume"]].astype(float)
-        return df[["Date","Open","High","Low","Close","Volume"]]
-    except Exception as e:
-        print("[WARN] Binance request failed:", e, "→ falling back…")
-        return _fetch_fallback("coingecko", start_date)
-
-def _fetch_fallback(provider, start_date):
-    provider = provider.lower()
-    if start_date is not None:
-        ts = pd.to_datetime(start_date)
-        ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
-        start_ts = int(ts.timestamp())
-    else:
-        start_ts = 0
-
-
-    if provider == "coingecko":
-        url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
-        params = {"vs_currency": "usd", "from": start_ts, "to": int(pd.Timestamp.utcnow().timestamp())}
-        try:
-            r = requests.get(url, params=params, timeout=30)
-            r.raise_for_status()
-            js = r.json()
-            prices = js.get("prices", [])
-            if not prices:
-                print("[WARN] CoinGecko empty; trying yfinance…")
-                return _fetch_fallback("yfinance", start_date)
-            df = pd.DataFrame(prices, columns=["ts","Close"])
-            df["Date"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
-            # synthesize OHLC from Close (model uses Close anyway)
-            for col in ["Open","High","Low"]:
-                df[col] = df["Close"]
-            df["Volume"] = np.nan
-            return df[["Date","Open","High","Low","Close","Volume"]]
-        except Exception as e:
-            print("[WARN] CoinGecko failed:", e, "→ yfinance…")
-            return _fetch_fallback("yfinance", start_date)
-
-    elif provider == "yfinance":
-        try:
-            import yfinance as yf
-            start = pd.Timestamp(start_date, tz="UTC") if start_date is not None else pd.Timestamp("2010-01-01", tz="UTC")
-            end = pd.Timestamp.utcnow().tz_localize("UTC")
-            t = yf.download("BTC-USD",
-                            start=start.tz_convert(None).date(),
-                            end=end.tz_convert(None).date(),
-                            interval="1d",
-                            progress=False)
-            if t is None or t.empty:
-                print("[WARN] yfinance empty; returning empty DataFrame.")
-                return pd.DataFrame(columns=["Date","Open","High","Low","Close","Volume"])
-            t = t.reset_index().rename(columns=str.title)  # Date, Open, High, Low, Close, Volume
-            t["Date"] = pd.to_datetime(t["Date"], utc=True)
-            return t[["Date","Open","High","Low","Close","Volume"]]
-        except Exception as e:
-            print("[WARN] yfinance failed:", e)
-            return pd.DataFrame(columns=["Date","Open","High","Low","Close","Volume"])
-
-    else:
-        print(f"[WARN] Unknown provider '{provider}'. Returning empty.")
+def _df_from_binance_rows(rows):
+    if not rows:
         return pd.DataFrame(columns=["Date","Open","High","Low","Close","Volume"])
+    df = pd.DataFrame(rows, columns=[
+        "Open Time","Open","High","Low","Close","Volume",
+        "Close Time","Quote Volume","Number of Trades",
+        "Taker Buy Base","Taker Buy Quote","Ignore"
+    ])
+    df["Date"] = pd.to_datetime(df["Open Time"], unit="ms", utc=True)
+    df = df[["Date","Open","High","Low","Close","Volume"]].copy()
+    df[["Open","High","Low","Close","Volume"]] = df[["Open","High","Low","Close","Volume"]].astype(float)
+    return df.sort_values("Date").reset_index(drop=True)
 
-# ---------------- Load base CSV & append fresh data ----------------
-print(f"[DATA] Reading CSV from: {CSV_PATH}")
-btcdf = pd.read_csv(CSV_PATH)
-if "Adj Close" in btcdf.columns:
-    btcdf.drop(columns=["Adj Close"], inplace=True)
+def fetch_all_binance(symbol="BTCUSDT", interval="1d", start="2020-10-01", pause=0.15):
+    """Paginate Binance (limit=1000) from start → now."""
+    start_ms = int(pd.Timestamp(start, tz="UTC").timestamp() * 1000)
+    all_rows, page = [], 0
+    while True:
+        params = {"symbol": symbol, "interval": interval, "limit": 1000, "startTime": start_ms}
+        r = requests.get(BINANCE_URL, params=params, timeout=30)
+        if r.status_code != 200:
+            raise RuntimeError(f"Binance HTTP {r.status_code}: {r.text[:200]}")
+        batch = r.json()
+        if not isinstance(batch, list) or len(batch) == 0:
+            break
+        all_rows.extend(batch)
+        page += 1
+        last_close_ms = batch[-1][6]
+        last_open_ts  = pd.to_datetime(batch[-1][0], unit="ms", utc=True)
+        print(f"[binance] page {page}: {len(batch)} rows → {last_open_ts.date()}")
+        next_start = last_close_ms + 1
+        if next_start <= start_ms:  # safety
+            break
+        start_ms = next_start
+        if len(batch) < 1000:
+            break
+        if pause:
+            time.sleep(pause)
+    return _df_from_binance_rows(all_rows)
 
-btcdf["Date"] = pd.to_datetime(btcdf["Date"], utc=True)
-last_date_utc = btcdf["Date"].max() + pd.Timedelta(days=1)
+def fetch_from_coingecko(start="2020-10-01"):
+    start_ts = int(pd.Timestamp(start, tz="UTC").timestamp())
+    end_ts   = int(pd.Timestamp.utcnow().timestamp())
+    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
+    params = {"vs_currency":"usd", "from":start_ts, "to":end_ts}
+    r = requests.get(url, params=params, timeout=30)
+    r.raise_for_status()
+    js = r.json()
+    prices = js.get("prices", [])
+    if not prices:
+        return pd.DataFrame(columns=["Date","Open","High","Low","Close","Volume"])
+    df = pd.DataFrame(prices, columns=["ts","Close"])
+    df["Date"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+    for col in ["Open","High","Low"]:
+        df[col] = df["Close"]
+    df["Volume"] = np.nan
+    df = df[["Date","Open","High","Low","Close","Volume"]]
+    return df.sort_values("Date").reset_index(drop=True)
 
-new_data = fetch_latest_binance_data(start_date=last_date_utc)
-btcdf_updated = pd.concat([btcdf, new_data], ignore_index=True)
-btcdf_updated = btcdf_updated.drop_duplicates(subset="Date", keep="first").sort_values("Date").reset_index(drop=True)
+def fetch_from_yf(start="2020-10-01"):
+    try:
+        import yfinance as yf
+    except Exception:
+        return pd.DataFrame(columns=["Date","Open","High","Low","Close","Volume"])
+    t = yf.download("BTC-USD",
+                    start=pd.Timestamp(start, tz="UTC").tz_convert(None).date(),
+                    end=pd.Timestamp.utcnow().tz_localize("UTC").tz_convert(None).date(),
+                    interval="1d",
+                    progress=False)
+    if t is None or t.empty:
+        return pd.DataFrame(columns=["Date","Open","High","Low","Close","Volume"])
+    t = t.reset_index().rename(columns=str.title)
+    t["Date"] = pd.to_datetime(t["Date"], utc=True)
+    t = t[["Date","Open","High","Low","Close","Volume"]]
+    return t.sort_values("Date").reset_index(drop=True)
 
-print("[INFO] Updated coverage:", btcdf_updated["Date"].iloc[0], "→", btcdf_updated["Date"].iloc[-1])
-print("[DEBUG] Last 5 dates:", btcdf_updated["Date"].tail().dt.date.tolist())
+def fetch_history(symbol=SYMBOL, interval=INTERVAL, start=HISTORY_START):
+    """Fetch full history from chosen DATA_SRC with fallbacks."""
+    try:
+        if DATA_SRC == "binance":
+            df = fetch_all_binance(symbol, interval, start)
+            if df.empty:
+                print("[WARN] Binance returned no rows; falling back to CoinGecko…")
+                df = fetch_from_coingecko(start)
+        elif DATA_SRC == "coingecko":
+            df = fetch_from_coingecko(start)
+        elif DATA_SRC == "yfinance":
+            df = fetch_from_yf(start)
+        else:
+            print(f"[WARN] Unknown DATA_SOURCE={DATA_SRC}; using CoinGecko")
+            df = fetch_from_coingecko(start)
+    except Exception as e:
+        print("[WARN] Primary fetch failed:", e, "→ trying CoinGecko then yfinance…")
+        df = fetch_from_coingecko(start)
+        if df.empty:
+            df = fetch_from_yf(start)
+    return df
 
-# Save the updated raw table if you want to inspect later
-btcdf_updated.to_csv("out/btc_updated.csv", index=False)
+# ---------------- Fetch data (no CSV needed) ----------------
+print(f"[DATA] Fetching {SYMBOL} {INTERVAL} from {HISTORY_START} → now via {DATA_SRC}…")
+btcdf_updated = fetch_history()
+if btcdf_updated.empty:
+    raise RuntimeError("No price data fetched from any provider.")
 
-# ---------------- Build modeling frame (no sd/ed trimming) ----------------
+print("[INFO] Coverage:", btcdf_updated["Date"].iloc[0], "→", btcdf_updated["Date"].iloc[-1])
+btcdf_updated.to_csv("out/btc_updated.csv", index=False)  # optional snapshot
+
+# ---------------- Build modeling frame ----------------
 closedf = btcdf_updated[["Date","Close"]].copy()
 closedf["Date"] = pd.to_datetime(closedf["Date"], utc=True)
-closedf_copy = closedf.copy()  # keep dates for plotting/target
+closedf_copy = closedf.copy()
 print("Data coverage:", closedf["Date"].min().date(), "→", closedf["Date"].max().date())
 
 # ---------------- Scale series ----------------
@@ -263,12 +266,12 @@ def evaluation(model, x_train, y_train, x_test, y_test, scaler):
     }
     return pd.DataFrame(metrics), ytest_i, test_pred_i
 
-# single-config sweep (same as your default)
-neurons_set     = [x_train.shape[1] * 8]
-dropout_prob_set= [0.0]
-activation_set  = ['tanh']
-batch_size_set  = [32]
-lr_set          = [0.001]
+# single-config sweep
+neurons_set      = [x_train.shape[1] * 8]
+dropout_prob_set = [0.0]
+activation_set   = ['tanh']
+batch_size_set   = [32]
+lr_set           = [0.001]
 
 best_mse = float('inf'); best_model = None; all_results=[]
 for neurons in neurons_set:
@@ -303,7 +306,6 @@ next_day_close_forecast = float(scaler.inverse_transform(next_day_scaled)[0,0])
 print(f"[Forecast] Next-day close: {next_day_close_forecast:.2f}")
 
 # ---------------- Optional charts (saved to out/) ----------------
-# Fitted chart
 train_pred = scaler.inverse_transform(model.predict(x_train, verbose=0))
 test_pred  = scaler.inverse_transform(model.predict(x_test,  verbose=0))
 
@@ -326,7 +328,10 @@ fig = px.line(plotdf, x='date', y=['actual_close','train_predicted_close','test_
 fig.update_layout(title_text='BTC Close Price: Actual VS Prediction', font_size=15, font_color='Black', plot_bgcolor='white')
 fig.for_each_trace(lambda t: t.update(name = next(names))); fig.update_xaxes(showgrid=False); fig.update_yaxes(showgrid=False)
 fig.write_html("out/btc_close_actual_chart.html")
-fig.write_image("out/btc_close_actual_chart.png")  # requires kaleido
+try:
+    fig.write_image("out/btc_close_actual_chart.png")  # needs kaleido
+except Exception as e:
+    print("[WARN] PNG save skipped (kaleido not available):", e)
 
 # 30-day roll-ahead (optional)
 x_input = test_data[len(test_data)-time_step:].reshape(1,-1)
@@ -357,7 +362,10 @@ fig2.add_vline(x=time_step, line_dash="dash", line_color="black")
 fig2.update_layout(title_text='LSTM BTC CLOSE PREDICTION', font_size=15, font_color='Black', plot_bgcolor='white')
 fig2.update_xaxes(showgrid=False); fig2.update_yaxes(showgrid=False)
 fig2.write_html("out/btc_close_prediction_chart.html")
-fig2.write_image("out/btc_close_prediction_chart.png")
+try:
+    fig2.write_image("out/btc_close_prediction_chart.png")
+except Exception as e:
+    print("[WARN] PNG save skipped (kaleido not available):", e)
 
 # ---------------- Final JSON + CSV ----------------
 def _f(x):
@@ -374,7 +382,7 @@ target_close_date_utc = (last_obs_date + pd.Timedelta(days=1)).date().isoformat(
 run_ts_utc = dt.datetime.utcnow().replace(microsecond=0).isoformat()
 
 payload = {
-    "symbol": "BTCUSDT",
+    "symbol": SYMBOL,
     "horizon": "next_daily_close",
     "run_ts_utc": run_ts_utc,
     "target_close_date_utc": target_close_date_utc,
@@ -388,7 +396,7 @@ with open("out/daily_forecast.json", "w") as f:
 row = {
     "run_ts_utc": run_ts_utc,
     "target_close_date_utc": target_close_date_utc,
-    "symbol": "BTCUSDT",
+    "symbol": SYMBOL,
     "forecast_close": _f(next_day_close_forecast),
     **{f"h1_{k.lower().replace(' ', '_')}": _f(v) for k, v in metrics_test.items()}
 }
@@ -403,8 +411,7 @@ df_hist.to_csv(hist_path, index=False)
 print(json.dumps(payload, indent=2))
 print("[OK] Wrote out/daily_forecast.json and out/history.csv")
 print(f"Next-day forecast close: {payload['forecast_close']:.2f}")
-for k in ["RMSE","MSE","MAE","MAPE","sMAPE","R\u00b2","Explained Variance","Gamma Deviance","Poisson Deviance"]:
-    v = metrics_test.get(k)
+for k, v in metrics_test.items():
     if v is None: continue
     if k in ("MAPE","sMAPE"): print(f"{k}: {100*v:.2f}%")
     elif k == "R\u00b2":      print(f"{k}: {v:.3f}")
