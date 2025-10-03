@@ -1,0 +1,18 @@
+{
+  "symbol": "BTCUSDT",
+  "horizon": "next_daily_close",
+  "run_ts_utc": "2025-10-03T20:26:32",
+  "target_close_date_utc": "2023-10-16",
+  "forecast_close": 26978.72265625,
+  "metrics_h1": {
+    "RMSE": 534.9742361553144,
+    "MSE": 286197.4333499621,
+    "MAE": 355.75817633762233,
+    "MAPE": 0.012709756684162663,
+    "sMAPE": 0.01273696428238604,
+    "R\u00b2": 0.8858365279332396,
+    "Explained Variance": 0.8871422926027176,
+    "Gamma Deviance": 0.0003688223573342685,
+    "Poisson Deviance": 10.262302105609992
+  }
+}
