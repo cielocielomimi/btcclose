@@ -17,11 +17,6 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Install system Graphviz (only if you use plot_model)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y graphviz
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -45,12 +40,18 @@ jobs:
           ls -la
           ls -la data || true
 
-      - name: Execute notebook with papermill
+      - name: Ensure CSV exists
+        run: |
+          test -f data/oct15.csv || { echo "ERROR: data/oct15.csv is missing"; exit 1; }
+
+      - name: Run forecast script
+        env:
+          CSV_PATH: data/oct15.csv
         run: |
           mkdir -p out
-          papermill -k python3 "single_layer.ipynb" out/output.ipynb
+          python run_forecast.py
 
-      # ONE Python heredoc handles both logs and run summary.
+      # Show forecast + metrics in logs and write a nice run summary
       - name: Show forecast + metrics and write summary
         shell: bash
         run: |
@@ -59,21 +60,16 @@ jobs:
           with open("out/daily_forecast.json") as f:
               d = json.load(f)
 
-          # --- Print to logs ---
           print(f"Next-day forecast close: {float(d['forecast_close']):.2f}")
           order = ["RMSE","MSE","MAE","MAPE","sMAPE","R²","Explained Variance","Gamma Deviance","Poisson Deviance"]
           m = d.get("metrics_h1", {}) or {}
           for k in order:
               if k in m and m[k] is not None:
                   v = float(m[k])
-                  if k in ("MAPE","sMAPE"):
-                      print(f"{k}: {100*v:.2f}%")
-                  elif k == "R²":
-                      print(f"{k}: {v:.3f}")
-                  else:
-                      print(f"{k}: {v:.2f}")
+                  if k in ("MAPE","sMAPE"): print(f"{k}: {100*v:.2f}%")
+                  elif k == "R²":           print(f"{k}: {v:.3f}")
+                  else:                     print(f"{k}: {v:.2f}")
 
-          # --- Write run summary card ---
           lines = [
               "## 📈 Daily BTC Forecast",
               f"**Run (UTC):** {d['run_ts_utc']}  ",
@@ -89,7 +85,6 @@ jobs:
                       v = float(m[k])
                       val = f"{100*v:.2f}%" if k in ("MAPE","sMAPE") else (f"{v:.3f}" if k=="R²" else f"{v:.2f}")
                       lines.append(f"| {k} | {val} |")
-
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
               fh.write("\n".join(lines) + "\n")
           PY
@@ -110,7 +105,6 @@ jobs:
           path: |
             out/daily_forecast.json
             out/history.csv
-            out/output.ipynb
             out/*.png
             out/*.html
 
