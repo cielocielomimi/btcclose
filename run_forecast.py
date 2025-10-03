@@ -87,15 +87,11 @@ ed = btcdf.iloc[-1, 0]
 print('Starting Date', sd)
 print('Ending Date', ed)
 
-closedf = btcdf[['Date','Close']]
-print('Shape of close dataframe:', closedf.shape)
-
-sd = pd.to_datetime(sd); ed = pd.to_datetime(ed)
+# ---------- Date window + copies (use fully updated data) ----------
 closedf = btcdf_updated[['Date', 'Close']].copy()
-closedf['Date'] = pd.to_datetime(closedf['Date'])
-closedf = closedf[(closedf['Date'] >= sd) & (closedf['Date'] <= ed)]
-print('Total daily BTC close price for testing:', closedf.shape[0])
+closedf['Date'] = pd.to_datetime(closedf['Date'])  # keep Timestamp
 closedf_copy = closedf.copy()
+print('Data coverage:', closedf['Date'].min().date(), '→', closedf['Date'].max().date())
 
 # ---------- Scale series ----------
 closedf_nodate = closedf[['Close']].copy()
