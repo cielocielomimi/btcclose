@@ -2,8 +2,12 @@ name: Daily BTC Forecast
 
 on:
   schedule:
-    - cron: "10 0 * * *"     # 00:10 UTC daily (08:10 Manila)
+    - cron: "10 0 * * *"   # 00:10 UTC daily (08:10 Manila)
   workflow_dispatch: {}
+
+# allow the bot to commit out/history.csv and out/daily_forecast.json
+permissions:
+  contents: write
 
 jobs:
   run-forecast:
@@ -35,23 +39,18 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
 
-      - name: Verify files are present
-        run: |
-          ls -la
-          ls -la data || true
-
-      - name: Ensure CSV exists
-        run: |
-          test -f data/oct15.csv || { echo "ERROR: data/oct15.csv is missing"; exit 1; }
-
-      - name: Run forecast script
+      - name: Run forecast script (no CSV; fetch full history)
         env:
-          CSV_PATH: data/oct15.csv
+          # If Binance is blocked for you, use coingecko (recommended in PH).
+          DATA_SOURCE: coingecko       # binance | coingecko | yfinance
+          SYMBOL: BTCUSDT              # used in JSON / history
+          INTERVAL: 1d
+          HISTORY_START: "2020-10-01"  # fetch from here to now
+          TIME_STEP: "15"
         run: |
           mkdir -p out
           python run_forecast.py
 
-      # Show forecast + metrics in logs and write a nice run summary
       - name: Show forecast + metrics and write summary
         shell: bash
         run: |
@@ -59,7 +58,6 @@ jobs:
           import json, os
           with open("out/daily_forecast.json") as f:
               d = json.load(f)
-
           print(f"Next-day forecast close: {float(d['forecast_close']):.2f}")
           order = ["RMSE","MSE","MAE","MAPE","sMAPE","R²","Explained Variance","Gamma Deviance","Poisson Deviance"]
           m = d.get("metrics_h1", {}) or {}
@@ -69,7 +67,6 @@ jobs:
                   if k in ("MAPE","sMAPE"): print(f"{k}: {100*v:.2f}%")
                   elif k == "R²":           print(f"{k}: {v:.3f}")
                   else:                     print(f"{k}: {v:.2f}")
-
           lines = [
               "## 📈 Daily BTC Forecast",
               f"**Run (UTC):** {d['run_ts_utc']}  ",
