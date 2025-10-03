@@ -41,8 +41,8 @@ jobs:
 
       - name: Run forecast script (no CSV; fetch full history)
         env:
-          # If Binance is blocked for you, use coingecko (recommended in PH).
-          DATA_SOURCE: coingecko       # binance | coingecko | yfinance
+          # If Binance is blocked for you, use coingecko.
+          DATA_SOURCE: binance       # binance | coingecko | yfinance
           SYMBOL: BTCUSDT              # used in JSON / history
           INTERVAL: 1d
           HISTORY_START: "2020-10-01"  # fetch from here to now
