@@ -49,7 +49,9 @@ def fetch_latest_binance_data(symbol="BTCUSDT", interval="1d", start_date=None):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": 1000}
     if start_date is not None:
-        params["startTime"] = int(pd.Timestamp(start_date, tz="UTC").timestamp() * 1000)
+        ts = pd.to_datetime(start_date)
+        ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+        params["startTime"] = int(ts.timestamp() * 1000)
 
     try:
         r = requests.get(url, params=params, timeout=30)
@@ -72,7 +74,13 @@ def fetch_latest_binance_data(symbol="BTCUSDT", interval="1d", start_date=None):
 
 def _fetch_fallback(provider, start_date):
     provider = provider.lower()
-    start_ts = int(pd.Timestamp(start_date, tz="UTC").timestamp()) if start_date is not None else 0
+    if start_date is not None:
+        ts = pd.to_datetime(start_date)
+        ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+        start_ts = int(ts.timestamp())
+    else:
+        start_ts = 0
+
 
     if provider == "coingecko":
         url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
