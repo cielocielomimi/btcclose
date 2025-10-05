@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   run-forecast:
-    runs-on: ubuntu-latest
+    # 👇 Run on your self-hosted runner
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 120
     concurrency:
       group: btc-forecast
@@ -41,11 +42,10 @@ jobs:
 
       - name: Run forecast script (no CSV; fetch full history)
         env:
-          # If Binance is blocked for you, use coingecko.
-          DATA_SOURCE: binance       # binance | coingecko | yfinance
-          SYMBOL: BTCUSDT              # used in JSON / history
+          DATA_SOURCE: binance        # binance | coingecko | yfinance
+          SYMBOL: BTCUSDT             # used in JSON / history
           INTERVAL: 1d
-          HISTORY_START: "2020-10-01"  # fetch from here to now
+          HISTORY_START: "2020-10-01" # fetch from here to now
           TIME_STEP: "15"
         run: |
           mkdir -p out
@@ -59,13 +59,13 @@ jobs:
           with open("out/daily_forecast.json") as f:
               d = json.load(f)
           print(f"Next-day forecast close: {float(d['forecast_close']):.2f}")
-          order = ["RMSE","MSE","MAE","MAPE","sMAPE","R²","Explained Variance","Gamma Deviance","Poisson Deviance"]
+          order = ["RMSE","MSE","MAE","MAPE","sMAPE","R\u00b2","Explained Variance","Gamma Deviance","Poisson Deviance"]
           m = d.get("metrics_h1", {}) or {}
           for k in order:
               if k in m and m[k] is not None:
                   v = float(m[k])
                   if k in ("MAPE","sMAPE"): print(f"{k}: {100*v:.2f}%")
-                  elif k == "R²":           print(f"{k}: {v:.3f}")
+                  elif k == "R\u00b2":       print(f"{k}: {v:.3f}")
                   else:                     print(f"{k}: {v:.2f}")
           lines = [
               "## 📈 Daily BTC Forecast",
@@ -80,7 +80,7 @@ jobs:
               for k in order:
                   if k in m and m[k] is not None:
                       v = float(m[k])
-                      val = f"{100*v:.2f}%" if k in ("MAPE","sMAPE") else (f"{v:.3f}" if k=="R²" else f"{v:.2f}")
+                      val = f"{100*v:.2f}%" if k in ("MAPE","sMAPE") else (f"{v:.3f}" if k=="R\u00b2" else f"{v:.2f}")
                       lines.append(f"| {k} | {val} |")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
               fh.write("\n".join(lines) + "\n")
