@@ -39,7 +39,7 @@ RUN_DIR  = os.path.join(OUT_BASE, "runs", RUN_TAG)
 os.makedirs(OUT_BASE, exist_ok=True)
 os.makedirs(RUN_DIR,  exist_ok=True)
 
-TIME_STEP      = int(os.getenv("TIME_STEP", "15"))
+TIME_STEP      = int(os.getenv("TIME_STEP", "30"))
 DATA_SRC       = os.getenv("DATA_SOURCE", "binance").lower()
 SYMBOL         = os.getenv("SYMBOL", "BTCUSDT")
 INTERVAL       = os.getenv("INTERVAL", "1d")
@@ -101,7 +101,7 @@ btcdf_updated = fetch_history()
 if btcdf_updated.empty:
     raise RuntimeError("No price data fetched from provider.")
 
-print("[INFO] Coverage:", btcdf_updated["Date"].iloc[0], "→", btccdf_updated["Date"].iloc[-1])
+print("[INFO] Coverage:", btcdf_updated["Date"].iloc[0], "→", btcdf_updated["Date"].iloc[-1])
 
 # Save a snapshot (tagged + latest convenience copy)
 snap_latest = os.path.join(OUT_BASE, "btc_updated.csv")
