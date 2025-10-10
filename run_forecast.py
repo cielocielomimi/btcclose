@@ -29,16 +29,23 @@ from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.metrics import RootMeanSquaredError, MeanAbsolutePercentageError
 
+# ---------------- Run tag ----------------
+# Use env RUN_TAG if set (useful in CI), otherwise UTC timestamp
+RUN_TAG = os.getenv("RUN_TAG") or dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
 # ---------------- Config ----------------
-os.makedirs("out", exist_ok=True)
+OUT_BASE = "out"
+RUN_DIR  = os.path.join(OUT_BASE, "runs", RUN_TAG)
+os.makedirs(OUT_BASE, exist_ok=True)
+os.makedirs(RUN_DIR,  exist_ok=True)
 
 TIME_STEP      = int(os.getenv("TIME_STEP", "15"))
-DATA_SRC       = os.getenv("DATA_SOURCE", "binance").lower()   # binance|coingecko|yfinance
+DATA_SRC       = os.getenv("DATA_SOURCE", "binance").lower()
 SYMBOL         = os.getenv("SYMBOL", "BTCUSDT")
 INTERVAL       = os.getenv("INTERVAL", "1d")
-HISTORY_START  = os.getenv("HISTORY_START", "2020-10-01")      # UTC
+HISTORY_START  = os.getenv("HISTORY_START", "2020-10-01")  # UTC
 
-print(f"[CFG] TIME_STEP={TIME_STEP}  DATA_SOURCE={DATA_SRC}  SYMBOL={SYMBOL}  START={HISTORY_START}")
+print(f"[CFG] TIME_STEP={TIME_STEP}  DATA_SOURCE={DATA_SRC}  SYMBOL={SYMBOL}  START={HISTORY_START}  RUN_TAG={RUN_TAG}")
 
 # ---------------- Data fetchers ----------------
 BINANCE_URL = "https://api.binance.com/api/v3/klines"
@@ -56,7 +63,7 @@ def _df_from_binance_rows(rows):
     df[["Open","High","Low","Close","Volume"]] = df[["Open","High","Low","Close","Volume"]].astype(float)
     return df.sort_values("Date").reset_index(drop=True)
 
-def fetch_all_binance(symbol="BTCUSDT", interval="1d", start="2020-10-01", pause=0.15):
+def fetch_all_binance(symbol="BTCUSDT", interval="1d", start="2020-01-01", pause=0.15):
     """Paginate Binance (limit=1000) from start → now."""
     start_ms = int(pd.Timestamp(start, tz="UTC").timestamp() * 1000)
     all_rows, page = [], 0
@@ -83,72 +90,26 @@ def fetch_all_binance(symbol="BTCUSDT", interval="1d", start="2020-10-01", pause
             time.sleep(pause)
     return _df_from_binance_rows(all_rows)
 
-def fetch_from_coingecko(start="2020-10-01"):
-    start_ts = int(pd.Timestamp(start, tz="UTC").timestamp())
-    end_ts   = int(pd.Timestamp.utcnow().timestamp())
-    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
-    params = {"vs_currency":"usd", "from":start_ts, "to":end_ts}
-    r = requests.get(url, params=params, timeout=30)
-    r.raise_for_status()
-    js = r.json()
-    prices = js.get("prices", [])
-    if not prices:
-        return pd.DataFrame(columns=["Date","Open","High","Low","Close","Volume"])
-    df = pd.DataFrame(prices, columns=["ts","Close"])
-    df["Date"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
-    for col in ["Open","High","Low"]:
-        df[col] = df["Close"]
-    df["Volume"] = np.nan
-    df = df[["Date","Open","High","Low","Close","Volume"]]
-    return df.sort_values("Date").reset_index(drop=True)
-
-def fetch_from_yf(start="2020-10-01"):
-    try:
-        import yfinance as yf
-    except Exception:
-        return pd.DataFrame(columns=["Date","Open","High","Low","Close","Volume"])
-    t = yf.download("BTC-USD",
-                    start=pd.Timestamp(start, tz="UTC").tz_convert(None).date(),
-                    end=pd.Timestamp.utcnow().tz_localize("UTC").tz_convert(None).date(),
-                    interval="1d",
-                    progress=False)
-    if t is None or t.empty:
-        return pd.DataFrame(columns=["Date","Open","High","Low","Close","Volume"])
-    t = t.reset_index().rename(columns=str.title)
-    t["Date"] = pd.to_datetime(t["Date"], utc=True)
-    t = t[["Date","Open","High","Low","Close","Volume"]]
-    return t.sort_values("Date").reset_index(drop=True)
-
 def fetch_history(symbol=SYMBOL, interval=INTERVAL, start=HISTORY_START):
-    """Fetch full history from chosen DATA_SRC with fallbacks."""
-    try:
-        if DATA_SRC == "binance":
-            df = fetch_all_binance(symbol, interval, start)
-            if df.empty:
-                print("[WARN] Binance returned no rows; falling back to CoinGecko…")
-                df = fetch_from_coingecko(start)
-        elif DATA_SRC == "coingecko":
-            df = fetch_from_coingecko(start)
-        elif DATA_SRC == "yfinance":
-            df = fetch_from_yf(start)
-        else:
-            print(f"[WARN] Unknown DATA_SOURCE={DATA_SRC}; using CoinGecko")
-            df = fetch_from_coingecko(start)
-    except Exception as e:
-        print("[WARN] Primary fetch failed:", e, "→ trying CoinGecko then yfinance…")
-        df = fetch_from_coingecko(start)
-        if df.empty:
-            df = fetch_from_yf(start)
-    return df
+    """Fetch full history from chosen DATA_SRC."""
+    if DATA_SRC != "binance":
+        raise RuntimeError(f"Only 'binance' supported in this script; got DATA_SOURCE={DATA_SRC}")
+    return fetch_all_binance(symbol, interval, start)
 
-# ---------------- Fetch data (no CSV needed) ----------------
 print(f"[DATA] Fetching {SYMBOL} {INTERVAL} from {HISTORY_START} → now via {DATA_SRC}…")
 btcdf_updated = fetch_history()
 if btcdf_updated.empty:
-    raise RuntimeError("No price data fetched from any provider.")
+    raise RuntimeError("No price data fetched from provider.")
 
-print("[INFO] Coverage:", btcdf_updated["Date"].iloc[0], "→", btcdf_updated["Date"].iloc[-1])
-btcdf_updated.to_csv("out/btc_updated.csv", index=False)  # optional snapshot
+print("[INFO] Coverage:", btcdf_updated["Date"].iloc[0], "→", btccdf_updated["Date"].iloc[-1])
+
+# Save a snapshot (tagged + latest convenience copy)
+snap_latest = os.path.join(OUT_BASE, "btc_updated.csv")
+snap_tagged = os.path.join(OUT_BASE, f"btc_updated-{RUN_TAG}.csv")
+snap_rundir  = os.path.join(RUN_DIR,  "btc_updated.csv")
+btcdf_updated.to_csv(snap_latest, index=False)
+btcdf_updated.to_csv(snap_tagged, index=False)
+btcdf_updated.to_csv(snap_rundir,  index=False)
 
 # ---------------- Build modeling frame ----------------
 closedf = btcdf_updated[["Date","Close"]].copy()
@@ -216,8 +177,11 @@ def plot_loss_accuracy(history, title):
     axs[2].set_title('MAPE - ' + title); axs[2].legend()
     for ax in axs: ax.set_xlabel('Epoch')
     plt.tight_layout()
-    out_png = os.path.join("out", f"{title.replace(' ', '_')}.png")
-    plt.savefig(out_png, dpi=300, bbox_inches='tight')
+    # Save tagged + in run dir
+    out_png_tag = os.path.join(OUT_BASE, f"{title.replace(' ', '_')}-{RUN_TAG}.png")
+    out_png_run = os.path.join(RUN_DIR,  f"{title.replace(' ', '_')}.png")
+    plt.savefig(out_png_tag, dpi=300, bbox_inches='tight')
+    plt.savefig(out_png_run, dpi=300, bbox_inches='tight')
     plt.close(fig)
 
 def evaluation(model, x_train, y_train, x_test, y_test, scaler):
@@ -293,8 +257,18 @@ for neurons in neurons_set:
                     all_results.append(df)
 
 final_results = pd.concat(all_results, ignore_index=True)
-best_model.save("out/best_btc_model.keras")
-final_results.to_csv("out/all_model_results.csv", index=False)
+
+# Save model/results (tagged + run dir)
+model_tag = os.path.join(OUT_BASE, f"best_btc_model-{RUN_TAG}.keras")
+model_run = os.path.join(RUN_DIR,  "best_btc_model.keras")
+best_model.save(model_tag)
+best_model.save(model_run)
+
+results_tag = os.path.join(OUT_BASE, f"all_model_results-{RUN_TAG}.csv")
+results_run = os.path.join(RUN_DIR,  "all_model_results.csv")
+final_results.to_csv(results_tag, index=False)
+final_results.to_csv(results_run, index=False)
+
 print("[INFO] Best Test MSE:", best_mse)
 
 model = best_model
@@ -327,9 +301,19 @@ fig = px.line(plotdf, x='date', y=['actual_close','train_predicted_close','test_
               labels={'value':'BTC Price','date':'Date'})
 fig.update_layout(title_text='BTC Close Price: Actual VS Prediction', font_size=15, font_color='Black', plot_bgcolor='white')
 fig.for_each_trace(lambda t: t.update(name = next(names))); fig.update_xaxes(showgrid=False); fig.update_yaxes(showgrid=False)
-fig.write_html("out/btc_close_actual_chart.html")
+
+# Save latest + tagged + run-dir
+html_latest = os.path.join(OUT_BASE, "btc_close_actual_chart.html")
+html_tagged = os.path.join(OUT_BASE, f"btc_close_actual_chart-{RUN_TAG}.html")
+html_run    = os.path.join(RUN_DIR,  "btc_close_actual_chart.html")
+fig.write_html(html_latest)
+fig.write_html(html_tagged)
+fig.write_html(html_run)
 try:
-    fig.write_image("out/btc_close_actual_chart.png")  # needs kaleido
+    png_tagged = os.path.join(OUT_BASE, f"btc_close_actual_chart-{RUN_TAG}.png")
+    png_run    = os.path.join(RUN_DIR,  "btc_close_actual_chart.png")
+    fig.write_image(png_tagged)  # needs kaleido
+    fig.write_image(png_run)
 except Exception as e:
     print("[WARN] PNG save skipped (kaleido not available):", e)
 
@@ -360,10 +344,19 @@ fig2 = px.line(new_pred_plot, x=new_pred_plot.index,
                labels={'value':'BTC Price','index':'Days'})
 fig2.add_vline(x=time_step, line_dash="dash", line_color="black")
 fig2.update_layout(title_text='LSTM BTC CLOSE PREDICTION', font_size=15, font_color='Black', plot_bgcolor='white')
-fig2.update_xaxes(showgrid=False); fig2.update_yaxes(showgrid=False)
-fig2.write_html("out/btc_close_prediction_chart.html")
+
+# Save latest + tagged + run-dir
+html2_latest = os.path.join(OUT_BASE, "btc_close_prediction_chart.html")
+html2_tagged = os.path.join(OUT_BASE, f"btc_close_prediction_chart-{RUN_TAG}.html")
+html2_run    = os.path.join(RUN_DIR,  "btc_close_prediction_chart.html")
+fig2.write_html(html2_latest)
+fig2.write_html(html2_tagged)
+fig2.write_html(html2_run)
 try:
-    fig2.write_image("out/btc_close_prediction_chart.png")
+    png2_tagged = os.path.join(OUT_BASE, f"btc_close_prediction_chart-{RUN_TAG}.png")
+    png2_run    = os.path.join(RUN_DIR,  "btc_close_prediction_chart.png")
+    fig2.write_image(png2_tagged)
+    fig2.write_image(png2_run)
 except Exception as e:
     print("[WARN] PNG save skipped (kaleido not available):", e)
 
@@ -385,34 +378,50 @@ payload = {
     "symbol": SYMBOL,
     "horizon": "next_daily_close",
     "run_ts_utc": run_ts_utc,
+    "run_tag": RUN_TAG,
     "target_close_date_utc": target_close_date_utc,
     "forecast_close": _f(next_day_close_forecast),
     "metrics_h1": metrics_test
 }
 
-with open("out/daily_forecast.json", "w") as f:
+# Latest (for workflow commit) + tagged + run-dir
+json_latest = os.path.join(OUT_BASE, "daily_forecast.json")
+json_tagged = os.path.join(OUT_BASE, f"daily_forecast-{RUN_TAG}.json")
+json_run    = os.path.join(RUN_DIR,  "daily_forecast.json")
+with open(json_latest, "w") as f:
+    json.dump(payload, f, indent=2)
+with open(json_tagged, "w") as f:
+    json.dump(payload, f, indent=2)
+with open(json_run, "w") as f:
     json.dump(payload, f, indent=2)
 
 row = {
     "run_ts_utc": run_ts_utc,
+    "run_tag": RUN_TAG,
     "target_close_date_utc": target_close_date_utc,
     "symbol": SYMBOL,
     "forecast_close": _f(next_day_close_forecast),
     **{f"h1_{k.lower().replace(' ', '_')}": _f(v) for k, v in metrics_test.items()}
 }
-hist_path = "out/history.csv"
+hist_path = os.path.join(OUT_BASE, "history.csv")
+hist_path_run = os.path.join(RUN_DIR, "history.csv")
 if os.path.exists(hist_path):
     df_hist = pd.read_csv(hist_path)
     df_hist = pd.concat([df_hist, pd.DataFrame([row])], ignore_index=True)
 else:
     df_hist = pd.DataFrame([row])
 df_hist.to_csv(hist_path, index=False)
+df_hist.to_csv(hist_path_run, index=False)
 
 print(json.dumps(payload, indent=2))
-print("[OK] Wrote out/daily_forecast.json and out/history.csv")
+print("[OK] Wrote latest + tagged outputs under:", OUT_BASE, "and", RUN_DIR)
 print(f"Next-day forecast close: {payload['forecast_close']:.2f}")
 for k, v in metrics_test.items():
-    if v is None: continue
-    if k in ("MAPE","sMAPE"): print(f"{k}: {100*v:.2f}%")
-    elif k == "R\u00b2":      print(f"{k}: {v:.3f}")
-    else:                    print(f"{k}: {v:.2f}")
+    if v is None: 
+        continue
+    if k in ("MAPE","sMAPE"):
+        print(f"{k}: {100*v:.2f}%")
+    elif k == "R\u00b2":
+        print(f"{k}: {v:.3f}")
+    else:
+        print(f"{k}: {v:.2f}")
