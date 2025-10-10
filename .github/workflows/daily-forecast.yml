@@ -45,8 +45,8 @@ jobs:
           DATA_SOURCE: binance        # binance | coingecko | yfinance
           SYMBOL: BTCUSDT             # used in JSON / history
           INTERVAL: 1d
-          HISTORY_START: "2020-10-01" # fetch from here to now
-          TIME_STEP: "15"
+          HISTORY_START: "2020-01-01" # fetch from here to now
+          TIME_STEP: "30"
         run: |
           mkdir -p out
           python run_forecast.py
