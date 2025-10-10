@@ -1,18 +1,18 @@
 {
   "symbol": "BTCUSDT",
   "horizon": "next_daily_close",
-  "run_ts_utc": "2025-10-09T01:59:59",
-  "target_close_date_utc": "2025-10-10",
-  "forecast_close": 121928.375,
+  "run_ts_utc": "2025-10-10T02:00:22",
+  "target_close_date_utc": "2025-10-11",
+  "forecast_close": 120766.0078125,
   "metrics_h1": {
-    "RMSE": 2168.8081779748645,
-    "MSE": 4703728.912850651,
-    "MAE": 1582.4544284188034,
-    "MAPE": 0.01623656330456435,
-    "sMAPE": 0.016264785379386734,
-    "R\u00b2": 0.9722651880886907,
-    "Explained Variance": 0.972444960173433,
-    "Gamma Deviance": 0.000523867103790594,
-    "Poisson Deviance": 49.189882282431434
+    "RMSE": 2174.31752467823,
+    "MSE": 4727656.698122864,
+    "MAE": 1617.1927015269887,
+    "MAPE": 0.016657516148454468,
+    "sMAPE": 0.01665044041349082,
+    "R\u00b2": 0.972259502613113,
+    "Explained Variance": 0.9722663542915215,
+    "Gamma Deviance": 0.0005259355295718221,
+    "Poisson Deviance": 49.412266865007375
   }
 }
